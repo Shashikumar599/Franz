@@ -16,6 +16,7 @@ Wikimedia stream  ─► producer ─► wiki.edits  (6 partitions) ─► consu
                                                                                     │
                                                                        query service + UI (:8000)
 ```
+https://github.com/user-attachments/assets/92f6db31-0c95-46e0-97c3-cd5470a9b6d0
 
 ## Run it
 
