@@ -1,0 +1,95 @@
+# Fixed project name: the network becomes wikipulse_default (the other compose files join it)
+# and the volumes keep their names, whatever the folder is called.
+name: wikipulse
+
+# Kafka 4.x: 3 KRaft nodes (each is broker AND controller) + Kafka UI.
+# Data lives in named volumes, so it survives `docker compose down` (not `down -v`).
+x-kafka-env: &kafka-env
+  # Same cluster ID on every node and in every volume. Changing it later breaks existing volumes.
+  CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qg
+  KAFKA_PROCESS_ROLES: broker,controller
+  # The controller quorum: all three nodes vote. Survives losing one.
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+  # What each broker binds to inside its container
+  KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+  # Replication: every partition has 3 copies; a write needs 2 in sync to count (acks=all)
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  # Create topics explicitly (CLI), not by accident
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+services:
+  kafka-1:
+    image: apache/kafka:4.0.0
+    container_name: kafka-1
+    hostname: kafka-1
+    restart: unless-stopped
+    ports:
+      - "9092:9092"   # EXTERNAL listener: clients running on your Mac
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      # INTERNAL: other containers. EXTERNAL: your Mac, so the port must be the one published above.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:19092,EXTERNAL://localhost:9092
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    image: apache/kafka:4.0.0
+    container_name: kafka-2
+    hostname: kafka-2
+    restart: unless-stopped
+    ports:
+      - "9093:9092"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:19092,EXTERNAL://localhost:9093
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    image: apache/kafka:4.0.0
+    container_name: kafka-3
+    hostname: kafka-3
+    restart: unless-stopped
+    ports:
+      - "9094:9092"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:19092,EXTERNAL://localhost:9094
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    ports:
+      - "8081:8080"   # host 8081 -> container 8080
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      # A list of brokers, so the UI still connects if one is down
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092
+
+volumes:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:

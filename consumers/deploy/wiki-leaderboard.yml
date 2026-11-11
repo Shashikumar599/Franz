@@ -1,0 +1,23 @@
+# Consumer group "wiki-leaderboard": deployed and scaled on its own. Same image as the other
+# groups, different entry point.
+#   docker compose -f consumers/deploy/wiki-leaderboard.yml up -d --build --scale wiki-leaderboard=3
+# Replicas share the group and split wiki.edits' partitions (max useful replicas = partitions).
+name: wikipulse-consumer-wiki-leaderboard   # own compose project, independent of the other groups
+
+services:
+  wiki-leaderboard:
+    build:
+      context: ..   # consumers/
+    image: wikipulse-consumers
+    command: ["wiki-leaderboard"]   # entry point: which group to run
+    restart: unless-stopped
+    # No container_name: replicas need unique names.
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092   # INTERNAL listeners
+      REDIS_URL: redis://redis:6379   # container name on the shared network
+
+# Join the network created by the root compose file (project "wikipulse", network "default").
+networks:
+  default:
+    name: wikipulse_default
+    external: true

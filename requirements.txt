@@ -1,0 +1,6 @@
+confluent-kafka
+requests
+redis
+websocket-client
+fastapi
+uvicorn

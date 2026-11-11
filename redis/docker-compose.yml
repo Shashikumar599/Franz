@@ -1,0 +1,34 @@
+# Redis + RedisInsight (UI), deployed separately from Kafka (../docker-compose.yml).
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # AOF = append-only file: every write command is logged and fsynced once per second.
+    # (Redis default is RDB snapshots only; AOF is off unless enabled.)
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6379:6379"   # for redis-cli / Python running on your Mac
+    volumes:
+      - redis-data:/data   # AOF files live here, so data survives container recreation
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight-data:/data   # keeps the saved connection across restarts
+
+volumes:
+  redis-data:
+  redisinsight-data:
+
+# Join the network created by the root compose file so the consumer can reach `redis:6379`.
+networks:
+  default:
+    name: wikipulse_default
+    external: true

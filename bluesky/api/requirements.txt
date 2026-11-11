@@ -1,0 +1,8 @@
+fastapi
+# [standard] adds httptools (C HTTP parser) and uvloop (libuv event loop); uvicorn picks them
+# automatically. Without them HTTP parsing + the event loop ran in pure Python: ~45 % of request
+# CPU in the profile (loadtest/results/profile-20261111-090839-api1w). uvloop is skipped on Windows.
+uvicorn[standard]
+redis
+# Rust-based JSON encoder for the hot /top-liked response (see main.py).
+orjson

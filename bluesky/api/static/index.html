@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<title>Top liked Bluesky posts: live leaderboard</title>
+<meta name="description" content="The most liked Bluesky posts of the last 1 to 60 minutes, counted live from the firehose through Kafka and Redis.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230a5bd1'/%3E%3Cpath d='M3 13h4l2.5-6 4 11 2.5-5H21' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  /* One system: a spacing scale, one radius family, one control height, one accent. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f6f3;
+    --surface: #ffffff;
+    --ink: #1c1b19;
+    --muted: #6b675f;                       /* labels and meta only, 5.2:1 on the ground */
+    --line: rgba(28, 27, 25, .13);
+    --line-strong: rgba(28, 27, 25, .28);
+    --action: #0a5bd1;                      /* links, focus, state */
+    --bar-l: .62; --bar-c: .13;             /* the race bars: one lightness, a hue per post */
+
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px;
+    --s-6: 32px; --s-7: 48px; --s-8: 64px;
+    --r-sm: 8px; --r-md: 12px;
+    --ctl: 44px;                            /* every button and field */
+    --gut: 24px;
+
+    --t-h1: clamp(28px, 1.6vw + 22px, 40px);
+    --t-body: 16px; --t-small: 14px; --t-label: 13px;
+
+    --ease: cubic-bezier(.2, .8, .2, 1);
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (min-width: 768px) { :root { --gut: var(--s-7); } }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211; --surface: #1a1a18; --ink: #ecebe7; --muted: #a09c93;
+      --line: rgba(236, 235, 231, .13); --line-strong: rgba(236, 235, 231, .3);
+      --action: #6aa6ff;
+      --bar-l: .74; --bar-c: .11;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 400 var(--t-body)/1.5 var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin-inline: auto; padding-inline: var(--gut); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  :focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }  /* no transition */
+  .skip-link { position: absolute; left: var(--s-4); top: -100px; z-index: 10; padding: var(--s-2) var(--s-4);
+               background: var(--ink); color: var(--bg); border-radius: var(--r-sm); }
+  .skip-link:focus { top: var(--s-2); }
+
+  /* Header: one hairline, the mark and the name on the left line, one plain link on the right. */
+  .top { border-bottom: 1px solid var(--line); }
+  .top .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { display: inline-flex; align-items: center; gap: var(--s-3); font-weight: 600; font-size: 20px;
+           letter-spacing: -.01em; color: var(--ink); text-decoration: none; }
+  .brand svg { width: 24px; height: 24px; }
+
+  .link { color: var(--action); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px;
+          text-decoration-color: color-mix(in srgb, var(--action) 35%, transparent);
+          transition: text-decoration-color 150ms var(--ease); }
+  .link:hover { text-decoration-color: var(--action); }
+
+  main { padding-block: var(--s-7) var(--s-8); }
+  h1 { margin: 0 0 var(--s-3); font-size: var(--t-h1); line-height: 1.1; font-weight: 600; letter-spacing: -.025em; }
+  .lead { margin: 0 0 var(--s-6); max-width: 62ch; }
+
+  /* Controls */
+  .controls { display: flex; flex-wrap: wrap; gap: var(--s-5); align-items: flex-end; margin-bottom: var(--s-5); }
+  .field { display: grid; gap: var(--s-2); }
+  .label { font-size: var(--t-small); color: var(--muted); font-weight: 500; }
+  .segments { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+
+  .btn { appearance: none; height: var(--ctl); min-width: var(--ctl); padding: 0 var(--s-4);
+         font: 500 var(--t-body)/1 var(--font); color: var(--ink); background: transparent;
+         border: 1px solid var(--line-strong); border-radius: var(--r-sm); cursor: pointer;
+         transition: background-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+  .btn[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn:active { transform: translateY(1px) scale(.985); transition-duration: 90ms; }
+  @media (hover: hover) and (pointer: fine) {
+    .btn:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+    .btn[aria-pressed="true"]:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
+    .btn:active { transform: translateY(1px) scale(.985); }
+  }
+
+  select { appearance: auto; height: var(--ctl); padding: 0 var(--s-3); font: 400 var(--t-body)/1 var(--font);
+           color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong);
+           border-radius: var(--r-sm); transition: border-color 140ms var(--ease); }
+  select:hover { border-color: var(--ink); }
+
+  /* Status: four readouts with reserved widths, so nothing jumps as numbers change. */
+  .stats { display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-6); margin: 0 0 var(--s-4); }
+  .stats div { display: grid; gap: var(--s-1); }
+  .stats dt { font-size: var(--t-label); font-weight: 500; color: var(--muted); }
+  .stats dd { margin: 0; min-height: 24px; font-variant-numeric: tabular-nums; }
+  .stats .num { min-width: 7ch; }
+  .chip { display: inline-flex; align-items: center; gap: var(--s-2); height: 24px; padding: 0 var(--s-3);
+          font-size: var(--t-label); font-weight: 500; border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--muted); }
+  .chip[data-state="HIT"] { border-color: color-mix(in srgb, var(--action) 55%, transparent); }
+  .chip[data-state="HIT"]::before { background: var(--action); border-color: var(--action); }
+  .chip[data-state="MISS"]::before { background: var(--ink); border-color: var(--ink); }
+
+  .status { min-height: var(--s-5); margin: 0 0 var(--s-3); font-size: var(--t-small); color: var(--muted); }
+  .status[data-tone="error"] { color: var(--ink); font-weight: 500; }
+
+  /* The race: every post is a row that keeps its identity. A row slides to its new rank
+     (transform), its bar grows or shrinks (scaleX), and rows enter and leave by fading. */
+  .board { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+  .race { --row-h: 64px; --cols: 28px minmax(150px, 230px) 1fr 80px;
+          position: relative; height: calc(var(--n, 0) * var(--row-h)); margin-bottom: -1px; }
+  .head { display: grid; grid-template-columns: 28px minmax(150px, 230px) 1fr 80px; column-gap: var(--s-4);
+          padding: var(--s-3) var(--s-4); font-size: var(--t-label); font-weight: 500; color: var(--muted);
+          border-bottom: 1px solid var(--line); }
+  .head span:last-child { text-align: right; }
+
+  .row { position: absolute; top: 0; left: 0; right: 0; height: var(--row-h);
+         display: grid; grid-template-columns: var(--cols); grid-template-areas: "rank who bar likes";
+         align-items: center; column-gap: var(--s-4); padding-inline: var(--s-4);
+         color: inherit; text-decoration: none; box-shadow: inset 0 -1px 0 var(--line);
+         transform: translateY(calc(var(--i) * var(--row-h)));
+         transition: transform 500ms var(--ease), opacity 300ms var(--ease), background-color 150ms var(--ease); }
+  .row.is-new { opacity: 0; transform: translateY(calc((var(--i) + 1) * var(--row-h))); }
+  .row.is-leaving { opacity: 0; pointer-events: none; }
+  @media (hover: hover) and (pointer: fine) { .row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); } }
+  .row:focus-visible { outline-offset: -2px; }
+
+  .rank { grid-area: rank; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .who { grid-area: who; display: grid; min-width: 0; line-height: 1.3; }
+  .what { font-family: var(--mono); font-size: var(--t-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row:hover .what { text-decoration: underline; text-underline-offset: 3px; }
+  .did { font-size: var(--t-label); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { grid-area: bar; height: 28px; }
+  .fill { display: block; height: 100%; border-radius: 6px; transform-origin: left; transform: scaleX(var(--v, 0));
+          background: var(--action); transition: transform 500ms var(--ease); }
+  @supports (color: oklch(.7 .1 200)) { .fill { background: oklch(var(--bar-l) var(--bar-c) var(--hue, 215)); } }
+  .likes { grid-area: likes; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .empty { margin: 0; padding: var(--s-5) var(--s-4); color: var(--muted); }
+  .note { margin: var(--s-4) 0 0; max-width: 70ch; font-size: var(--t-small); color: var(--muted); }
+
+  @media (max-width: 639px) {
+    main { padding-block: var(--s-6) var(--s-7); }
+    .controls { gap: var(--s-4); }
+    .head { display: none; }
+    .race { --row-h: 76px; --cols: 28px 1fr 72px; }
+    .row { grid-template-areas: "rank who likes" ". bar bar"; row-gap: 6px; align-content: center; padding-inline: var(--s-3); }
+    .bar { height: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .btn, .link, .fill, select, .row { transition-property: color, background-color, border-color, opacity; }
+    .btn:hover, .btn:active { transform: none; }
+    .row, .row.is-new { transition-duration: 0s; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to the leaderboard</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--action)"/><path d="M3 13h4l2.5-6 4 11 2.5-5H21" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      WikiPulse
+    </a>
+    <a class="link" href="/docs">API docs</a>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+  <h1>Top liked Bluesky posts</h1>
+  <p class="lead">Likes from the live Bluesky firehose, counted through Kafka and Redis. Pick a window and the board follows.</p>
+
+  <div class="controls">
+    <div class="field">
+      <span class="label" id="window-label">Window</span>
+      <div class="segments" id="windows" role="group" aria-labelledby="window-label"></div>
+    </div>
+    <div class="field">
+      <label class="label" for="limit">Show</label>
+      <select id="limit">
+        <option value="10">10 posts</option>
+        <option value="20">20 posts</option>
+        <option value="50">50 posts</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="label" for="every">Refresh</label>
+      <select id="every">
+        <option value="250">Every 0.25 s</option>
+        <option value="1000" selected>Every 1 s</option>
+        <option value="5000">Every 5 s</option>
+        <option value="0">Paused</option>
+      </select>
+    </div>
+  </div>
+
+  <dl class="stats" aria-label="How this result was produced">
+    <div><dt>Cache</dt><dd><span class="chip" id="cache" data-state="">Waiting</span></dd></div>
+    <div><dt>Result age</dt><dd class="num" id="age">–</dd></div>
+    <div><dt>Compute</dt><dd class="num" id="compute">–</dd></div>
+    <div><dt>Round trip</dt><dd class="num" id="rtt">–</dd></div>
+  </dl>
+  <p class="status" id="status" role="status"></p>
+
+  <div class="board" id="board">
+    <div class="head" aria-hidden="true"><span>#</span><span>Post</span><span>Likes in this window</span><span>Likes</span></div>
+    <div class="race" id="race" role="list" aria-label="Most liked posts in the selected window"></div>
+    <p class="empty" id="empty">Loading the first result…</p>
+  </div>
+  <p class="note">Each minute keeps its 100 most liked posts, so totals over long windows are close, not exact. Unlikes are not subtracted.</p>
+  <noscript><p class="status">This page needs JavaScript to load results.</p></noscript>
+</main>
+
+<script>
+  const WINDOWS = [[1, "1 min"], [5, "5 min"], [10, "10 min"], [15, "15 min"], [30, "30 min"], [60, "1 hour"]];
+  const CACHE_HINT = {
+    HIT: "Served from the cache",
+    MISS: "Computed by this request",
+    WAIT: "Waited for another request's result",
+  };
+  // One hue per post so a bar can be followed as it moves. None is violet (270 to 330 degrees).
+  const HUES = [250, 215, 190, 160, 135, 95, 70, 45, 20, 350];
+  const numberFormat = new Intl.NumberFormat();
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    windows: $("windows"), limit: $("limit"), every: $("every"), cache: $("cache"), age: $("age"),
+    compute: $("compute"), rtt: $("rtt"), status: $("status"), board: $("board"), race: $("race"), empty: $("empty"),
+  };
+
+  let minutes = 15;
+  let timer = null;
+  let inFlight = false;
+  let latest = 0;          // id of the newest request; older answers are ignored
+  let errorText = "";
+  let holding = false;     // the pointer or focus is on the board: keep it still so a row can be clicked
+  let orderTimer = null;
+  const rowsByUrl = new Map();   // one element per post: it keeps its identity while it moves
+
+  function setText(node, text) { if (node.textContent !== text) node.textContent = text; }
+
+  function updateStatus() {
+    let text = "", tone = "";
+    if (errorText) { text = errorText; tone = "error"; }
+    else if (holding) text = "Holding the board while you point at it.";
+    else if (Number(els.every.value) === 0) text = "Paused. Choose a refresh rate to resume.";
+    els.status.textContent = text;
+    els.status.dataset.tone = tone;
+  }
+
+  function buildWindowButtons() {
+    for (const [m, label] of WINDOWS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = label;
+      b.dataset.minutes = m;
+      b.setAttribute("aria-pressed", String(m === minutes));
+      b.onclick = () => { minutes = m; syncButtons(); refresh(true); };
+      els.windows.appendChild(b);
+    }
+  }
+  function syncButtons() {
+    for (const b of els.windows.children) b.setAttribute("aria-pressed", String(Number(b.dataset.minutes) === minutes));
+  }
+
+  function hueFor(url) {
+    let h = 0;
+    for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) >>> 0;
+    return HUES[h % HUES.length];
+  }
+
+  function createRow(item) {
+    const el = document.createElement("a");
+    el.className = "row is-new";
+    el.setAttribute("role", "listitem");
+    el.target = "_blank";
+    el.rel = "noopener";
+    el.href = item.url;
+    el.style.setProperty("--hue", hueFor(item.url));
+    el.innerHTML =
+      '<span class="rank"></span>' +
+      '<span class="who"><span class="what"></span><span class="did"></span></span>' +
+      '<span class="bar" aria-hidden="true"><span class="fill"></span></span>' +
+      '<span class="likes"></span>';
+    return {
+      el,
+      rank: el.querySelector(".rank"),
+      what: el.querySelector(".what"),
+      did: el.querySelector(".did"),
+      fill: el.querySelector(".fill"),
+      likes: el.querySelector(".likes"),
+    };
+  }
+
+  function updateRow(row, item, index, top) {
+    row.el.style.setProperty("--i", index);
+    row.fill.style.setProperty("--v", Math.max(0.02, item.likes / top).toFixed(3));
+    setText(row.rank, String(index + 1));
+    setText(row.what, "/" + item.rkey);
+    setText(row.did, item.did);
+    setText(row.likes, numberFormat.format(item.likes));
+    row.el.setAttribute("aria-label",
+      `${index + 1}. Post ${item.rkey} by ${item.did}, ${item.likes} likes. Opens on bsky.app in a new tab.`);
+  }
+
+  function leaveRow(row, count) {
+    row.el.classList.add("is-leaving");
+    row.el.tabIndex = -1;
+    row.el.style.setProperty("--i", count);   // slide down while fading out
+    setTimeout(() => row.el.remove(), 450);
+  }
+
+  // Tab order follows the DOM, so put the rows in rank order once they have stopped moving.
+  // Moving a node makes it jump, which is invisible at rest; never while focus is inside.
+  function scheduleDomOrder(items) {
+    clearTimeout(orderTimer);
+    orderTimer = setTimeout(() => {
+      if (els.race.contains(document.activeElement)) return;
+      let previous = null;
+      for (const item of items) {
+        const row = rowsByUrl.get(item.url);
+        if (!row) continue;
+        const wanted = previous ? previous.nextElementSibling : els.race.firstElementChild;
+        if (row.el !== wanted) els.race.insertBefore(row.el, wanted);
+        previous = row.el;
+      }
+    }, 700);
+  }
+
+  function render(data, roundTripMs) {
+    const items = data.items;
+    els.race.style.setProperty("--n", items.length);
+    const top = items.length ? items[0].likes : 1;
+    const seen = new Set();
+
+    items.forEach((item, index) => {
+      seen.add(item.url);
+      let row = rowsByUrl.get(item.url);
+      if (!row) {
+        row = createRow(item);
+        rowsByUrl.set(item.url, row);
+        updateRow(row, item, index, top);
+        els.race.appendChild(row.el);
+        void row.el.offsetHeight;                 // paint the start state, then let it slide in
+        row.el.classList.remove("is-new");
+      } else {
+        updateRow(row, item, index, top);
+      }
+    });
+    for (const [url, row] of rowsByUrl) {
+      if (!seen.has(url)) { leaveRow(row, items.length); rowsByUrl.delete(url); }
+    }
+    scheduleDomOrder(items);
+
+    els.empty.hidden = items.length > 0;
+    els.empty.textContent = "No likes in this window yet.";
+
+    els.cache.textContent = data.source;
+    els.cache.dataset.state = data.source;
+    els.cache.title = CACHE_HINT[data.source] || "";
+    const age = Math.max(0, Math.round(Date.now() - data.computed_at * 1000));
+    setText(els.age, age + " ms");
+    setText(els.compute, data.compute_ms + " ms");
+    setText(els.rtt, roundTripMs + " ms");
+  }
+
+  async function refresh(force) {
+    if (document.hidden) return;                 // nobody is looking: do not poll
+    if (holding && !force) return;               // keep the board still under the pointer
+    if (inFlight && !force) return;              // never stack timer requests behind a slow one
+    const mine = ++latest;
+    inFlight = true;
+    const started = performance.now();
+    try {
+      const res = await fetch(`/top-liked?minutes=${minutes}&limit=${els.limit.value}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status === 503 ? "The result is being computed. Retrying." : `The service answered ${res.status}.`);
+      const data = await res.json();
+      if (mine !== latest) return;               // a newer request already took over
+      errorText = "";
+      render(data, Math.round(performance.now() - started));
+    } catch (err) {
+      if (mine === latest) errorText = err instanceof TypeError ? "Cannot reach the service. Retrying." : err.message;
+    } finally {
+      if (mine === latest) inFlight = false;
+      updateStatus();
+    }
+  }
+
+  function schedule() {
+    clearInterval(timer);
+    const every = Number(els.every.value);
+    if (every > 0) timer = setInterval(refresh, every);
+    updateStatus();
+  }
+
+  buildWindowButtons();
+  els.limit.onchange = () => refresh(true);
+  els.every.onchange = () => { schedule(); refresh(true); };
+  els.board.addEventListener("pointerenter", () => { holding = true; updateStatus(); });
+  els.board.addEventListener("pointerleave", () => { holding = false; updateStatus(); refresh(true); });
+  els.board.addEventListener("focusin", () => { holding = true; updateStatus(); });
+  els.board.addEventListener("focusout", () => { holding = false; updateStatus(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
+  schedule();
+  refresh(true);
+</script>
+</body>
+</html>

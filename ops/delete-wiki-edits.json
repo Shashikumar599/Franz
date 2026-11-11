@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "partitions": [
+    {"topic": "wiki.edits", "partition": 0, "offset": -1},
+    {"topic": "wiki.edits", "partition": 1, "offset": -1},
+    {"topic": "wiki.edits", "partition": 2, "offset": -1},
+    {"topic": "wiki.edits", "partition": 3, "offset": -1},
+    {"topic": "wiki.edits", "partition": 4, "offset": -1},
+    {"topic": "wiki.edits", "partition": 5, "offset": -1}
+  ]
+}

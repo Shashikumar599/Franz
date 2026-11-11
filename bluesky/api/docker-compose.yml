@@ -1,0 +1,26 @@
+# Bluesky query service + UI, separate from Kafka and Redis.
+# UI: http://localhost:8000  ·  API docs: http://localhost:8000/docs
+services:
+  bsky-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379   # container name on the shared network
+      # Safety expiry only. Must exceed the longest gap between two refreshes of one key:
+      # pause + 2 x cycle work (60 windows x ~8-17 ms of Redis each) ~ 1.5 s, more under load.
+      CACHE_TTL_MS: "2000"
+      # Pause between refresh cycles. 50 ms kept Redis ~90 % busy with 60 active windows
+      # (load test full-20261110-192906). Results are already ~0.5-1 s behind from the
+      # pipeline (Kafka lag), so 500 ms costs little real freshness.
+      REFRESH_INTERVAL_MS: "500"
+      # uvicorn reads WEB_CONCURRENCY as its --workers count. Each worker is a separate process
+      # with its own refresher. Set per run: API_WORKERS=2 docker compose -f ... up -d
+      WEB_CONCURRENCY: "${API_WORKERS:-1}"
+
+# Join the network created by the root compose file (project "wikipulse", network "default").
+networks:
+  default:
+    name: wikipulse_default
+    external: true

@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Producer resume positions (local state)
+producers/checkpoints/
+producer/checkpoint.json
+producer/checkpoint.json.tmp
+bluesky/producer/checkpoint.json
+bluesky/producer/checkpoint.json.tmp
+
+# Raw load-test output (large: per-request CSVs, vegeta binaries). Write-ups live in findings/.
+loadtest/results/
+
+# Generated videos
+brag-output*/
+
+# Local working notes
+CLAUDE.md
+HANDOVER.md
+
+# Env / local config
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

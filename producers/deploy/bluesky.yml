@@ -1,0 +1,26 @@
+# Bluesky producer: deployed on its own. Same image as the other producers, different entry point.
+#   docker compose -f producers/deploy/bluesky.yml up -d --build
+# Keep exactly ONE instance: it is a single upstream feed, a second would publish every event twice.
+name: wikipulse-producer-bluesky   # own compose project, so it never touches the other producers
+
+services:
+  bluesky-producer:
+    build:
+      context: ..   # producers/
+    image: wikipulse-producers
+    command: ["bluesky"]   # entry point: which source to run
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092   # INTERNAL listeners
+      CHECKPOINT_DIR: /data/checkpoints
+    volumes:
+      - checkpoints:/data/checkpoints   # resume point survives container recreation
+
+volumes:
+  checkpoints:
+
+# Join the network created by the root compose file (project "wikipulse", network "default").
+networks:
+  default:
+    name: wikipulse_default
+    external: true
