@@ -342,6 +342,64 @@ With only **one** broker down, quorum holds (2 of 3), followers are elected lead
 
 **Question:** What is log compaction, and when would you use it instead of time-based retention?
 
+**Your answer (summary):** Didn't know.
+
+**Answer:**
+1. **Two cleanup policies** (`cleanup.policy`, set per topic):
+   - `delete` (default): whole **segments** older than `retention.ms` (or beyond `retention.bytes`) are dropped. Keeps *every* event within the window. `bsky.likes` uses this with 24 h.
+   - `compact`: keeps **at least the latest record per key**; older records with the same key are removed in the background. The topic becomes a **table snapshot** (latest state per key) that never expires by age.
+   - `compact,delete`: both (latest per key, but also dropped after the retention time).
+2. **Example:** `k1=A, k2=B, k1=C, k2=null, k3=D` → after compaction: `k1=C, k3=D`. **Offsets don't change** (gaps appear) and order is kept.
+3. **Delete a key:** produce a **tombstone** (key + null value). It's kept for `delete.retention.ms` (24 h default) so consumers see the delete, then removed.
+4. **Mechanics:** the log is split into segments; the **active segment is never compacted**; background **log cleaner** threads compact when the "dirty" (uncompacted) share passes `min.cleanable.dirty.ratio` (0.5). So compaction is **eventual**: several values for a key can coexist for a while. Guarantee: "at least the latest", not "only the latest". Tuning: `min.compaction.lag.ms`, `max.compaction.lag.ms`.
+5. **Needs keys**: no key means nothing to compact on (links to Q2).
+6. **When to use which:**
+   - **Delete:** event streams where every event matters within a window: clicks, likes, logs, metrics.
+   - **Compact:** "current state per entity": CDC (latest row per primary key), user profiles and config, **Kafka Streams changelog topics** (state store backups), **`__consumer_offsets` itself** (latest offset per group+partition). A new service rebuilds a cache by reading a compacted topic from the beginning.
+7. **This project:** `bsky.likes` must be `delete` (each like is an increment; compaction would keep one like per post and destroy the counts). If you published *absolute* per-post totals keyed by post, that topic could be compacted, and Redis could be rebuilt from it in one pass.
+
+**Final answer (say this):**
+> "Kafka has two cleanup policies. Delete, the default, drops whole segments older than retention.ms, so you keep every event within a time window. Compact keeps at least the latest record for each key, removed in the background by the log cleaner, so the topic becomes a snapshot of current state that doesn't expire by age. Offsets stay the same, and to delete a key you write a tombstone, a null value, which is kept for delete.retention.ms so consumers see it. Compaction is eventual: the active segment is never compacted, so old values can linger for a while. I'd use delete for event streams like my likes topic, where every event is an increment; compaction there would destroy the counts. I'd use compact for state per entity: CDC, user profiles, Kafka Streams changelogs, and Kafka's own __consumer_offsets, which is compacted. It requires keys."
+
+### Follow-up: CDC, full row as value, primary key as key. Is the older event deleted automatically?
+
+**Eventually, not immediately.**
+- The older record is removed only when: it's no longer in the **active segment** (segments roll at `segment.bytes` 1 GB or `segment.ms` 7 days by default); it's older than `min.compaction.lag.ms` (0 by default); and the log cleaner picks that partition, which happens when the dirty share passes `min.cleanable.dirty.ratio` (0.5). On a quiet topic that can take days. `max.compaction.lag.ms` puts an upper bound on it.
+- **Live consumers see both events anyway.** Compaction only changes what a consumer *starting later from the beginning* sees. Guarantee: a caught-up consumer sees every update; a consumer reading from offset 0 sees *at least* the latest value per key.
+- **Row delete:** Debezium emits a delete event *plus a tombstone* (PK, null value). The tombstone lets compaction remove the key entirely after `delete.retention.ms`.
+
+**Why it works for CDC (and when it breaks):**
+- Needs **full row images**. If events carried only changed columns (deltas), keeping only the latest would lose data.
+- Key = PK → same partition → updates stay in commit order, so the **latest offset = latest DB state**.
+- Gotcha: **adding partitions** changes `hash(key) % N`, so a key can then live in two partitions. The old copy in the old partition is never compacted away, and readers can see a stale row. Size compacted topics up front, or re-key into a new topic.
+
+---
+
+## Q13. Consumer lag
+
+**Question:** What is consumer lag, how do you monitor it in production, and what do you do when it keeps growing?
+
+**Your answer (summary):** Lag = latest offset the producer wrote − offset the consumer committed, summed over the partitions a consumer is subscribed to. Monitor with metrics from Kafka. If it grows, find out why (more traffic, or slower processing), then scale vertically or add consumers.
+
+**Feedback (5/10):** Definition is right. Monitoring and remediation are too generic for a production question. Gaps:
+- **Lag is per partition**, per group. A sum hides a **hot or stuck partition**; alert on the **max per partition** too. "Subscribed" → **assigned**.
+- Precise: committed offset vs **high watermark** (consumers can only read up to the HW), not the leader's very last write.
+- **Offset lag vs time lag:** 100k messages means 8 min at 200/s but 2 s at 50k/s. Alert on **time lag** (how old the oldest unprocessed record is); that's what an SLO cares about.
+- **No tools named:** `kafka-consumer-groups --describe`, Kafka UI, client metrics (`records-lag-max`, librdkafka `consumer_lag` stats), **kafka-lag-exporter / Burrow / KMinion → Prometheus**, alert on *trend*, not a fixed number.
+- **Diagnosis too thin.** Check: all partitions or one (hot key, or a **poison message** with the offset not moving); producer rate up; downstream slow (Redis/DB latency); errors and retries; **rebalance storms** (frequent rebalances = no progress; check `max.poll.interval.ms`); a crashed consumer not yet timed out.
+- **Remedies missing the limit:** scaling out stops at the **partition count**. Beyond that: more partitions (breaks key→partition mapping), batch writes and pre-aggregation, concurrency within a partition (key-level parallel consumer), downstream fixes, **autoscaling on lag** (KEDA, Phase 9).
+- **Missed the deadline:** lag must drain before **retention** deletes unread data, or it's lost (24 h here).
+- Missed your real example: Mac sleep → 101k lag → drained in minutes.
+
+**Final answer (say this):**
+> "Lag is per partition: the high watermark minus the group's committed offset. I watch the max per partition, not only the sum, because a sum hides one hot or stuck partition. And I care more about time lag, how old the oldest unprocessed record is, than message count, because 100k messages is minutes at my rate and seconds at 50k a second. I monitor it with kafka-lag-exporter or Burrow into Prometheus, alerting on a sustained upward trend and on time lag, with the CLI and Kafka UI for drilling in. When it grows, first: is it all partitions or one? One partition with a frozen offset is a poison message or a hot key, and scaling won't help. If it's everywhere, compare the produce rate with consumer throughput, then check downstream latency, errors, and rebalance storms. Fixes: scale out up to the partition count, batch and pre-aggregate writes, fix the slow dependency, or autoscale on lag with KEDA. The hard deadline is retention: lag must drain before unread data expires, 24 hours in my setup. I saw this live: my laptop slept, lag hit 100k, and it drained in a few minutes."
+
+---
+
+## Q14. Producer throughput
+
+**Question:** Traffic grows to 50k likes per second, and your producer can't keep up: its local buffer fills and sends start failing. The brokers are healthy. What would you look at and change?
+
 **Your answer (summary):** _pending_
 
 **Feedback:** _pending_
